@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="画像上の2点間を実寸ミリメートルで測定し、ロゴ配置も確認できるブラウザツール" />
+  <title>MeasureLab — 画像長さ測定</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" aria-label="MeasureLab">
+      <span class="brand-mark">M</span>
+      <span><b>MeasureLab</b><small>画像長さ測定</small></span>
+    </div>
+    <div class="top-actions">
+      <button class="btn ghost" id="undoBtn" title="元に戻す (Ctrl+Z)" disabled>↶ <span>元に戻す</span></button>
+      <button class="btn ghost" id="redoBtn" title="やり直す (Ctrl+Shift+Z)" disabled>↷ <span>やり直す</span></button>
+      <span class="divider"></span>
+      <button class="btn ghost" id="importProjectBtn">読み込む</button>
+      <button class="btn primary" id="exportProjectBtn">プロジェクト保存</button>
+      <input type="file" id="projectInput" accept="application/json,.json" hidden />
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="left-rail" aria-label="ツール">
+      <button class="tool active" data-tool="select" title="選択・移動 (V)"><span>↖</span><small>選択</small></button>
+      <button class="tool" data-tool="measure" title="距離を測定 (M)"><span>⟷</span><small>測定</small></button>
+      <button class="tool" data-tool="calibrate" title="基準線で校正 (C)"><span>⌁</span><small>校正</small></button>
+      <button class="tool" data-tool="guide" title="補助線を追加 (G)"><span>＋</span><small>ガイド</small></button>
+      <button class="tool" data-tool="color" title="画像から色を取得 (I)"><span>◉</span><small>色取得</small></button>
+      <button class="tool" data-tool="pan" title="表示を移動 (H / Space / ホイールクリック)"><span>✋</span><small>移動</small></button>
+      <span class="rail-spacer"></span>
+      <button class="tool" id="fitBtn" title="全体表示 (0)"><span>⊡</span><small>全体</small></button>
+    </aside>
+
+    <section class="workspace-panel">
+      <div class="workspace-toolbar">
+        <div class="file-actions">
+          <label class="btn primary file-btn">画像を開く<input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" /></label>
+          <label class="btn secondary file-btn">ロゴを追加<input id="logoInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" /></label>
+        </div>
+        <div class="view-actions">
+          <button class="icon-btn" id="zoomOutBtn" aria-label="縮小">−</button>
+          <output id="zoomLabel">100%</output>
+          <button class="icon-btn" id="zoomInBtn" aria-label="拡大">＋</button>
+          <span class="divider"></span>
+          <label class="toggle compact"><input id="gridToggle" type="checkbox" /><span></span>グリッド</label>
+          <label class="toggle compact"><input id="snapToggle" type="checkbox" checked /><span></span>スナップ</label>
+        </div>
+      </div>
+
+      <div class="canvas-wrap" id="canvasWrap">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">⌗</div>
+          <h1>画像から、正確な寸法を。</h1>
+          <p>画像をドロップするか、［画像を開く］から開始してください。</p>
+          <label class="btn primary large file-btn">画像を選択<input type="file" id="emptyImageInput" accept="image/png,image/jpeg,image/webp" /></label>
+          <div class="privacy-note">画像と測定データはこのブラウザ内で処理されます</div>
+        </div>
+        <canvas id="canvas" tabindex="0" aria-label="画像測定キャンバス"></canvas>
+        <div class="drop-hint" id="dropHint">画像をここにドロップ</div>
+        <div class="loupe" id="loupe" hidden><canvas width="140" height="140"></canvas><span></span></div>
+        <div class="statusbar">
+          <span id="cursorPosition">X: — / Y: —</span>
+          <span id="statusMessage">画像を読み込んでください</span>
+          <span id="scaleStatus" class="warning-dot">縮尺未設定</span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <nav class="tabs" aria-label="設定パネル">
+        <button class="tab active" data-tab="setup">設定</button>
+        <button class="tab" data-tab="logo">ロゴ</button>
+        <button class="tab" data-tab="results">測定 <em id="measurementCount">0</em></button>
+      </nav>
+
+      <div class="tab-panel active" id="setupPanel">
+        <section class="card image-card">
+          <div class="section-heading"><h2>元画像</h2><span class="badge" id="imageBadge">未読込</span></div>
+          <dl class="meta-list">
+            <div><dt>ファイル</dt><dd id="fileName">—</dd></div>
+            <div><dt>ピクセル</dt><dd id="pixelSize">—</dd></div>
+            <div><dt>縦横比</dt><dd id="aspectRatio">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="card">
+          <div class="section-heading"><h2>縮尺</h2><button class="help" title="画像の実寸を決めます">?</button></div>
+          <div class="segmented" id="scaleMethod">
+            <button class="active" data-method="width">横幅</button>
+            <button data-method="height">縦幅</button>
+            <button data-method="reference">基準線</button>
+            <button data-method="dpi">DPI</button>
+          </div>
+          <div class="scale-input" data-scale-panel="width">
+            <label>画像の横幅 <span><input id="widthMm" type="number" min="0.01" step="0.1" placeholder="例: 210" /> mm</span></label>
+          </div>
+          <div class="scale-input hidden" data-scale-panel="height">
+            <label>画像の縦幅 <span><input id="heightMm" type="number" min="0.01" step="0.1" placeholder="例: 297" /> mm</span></label>
+          </div>
+          <div class="scale-input hidden" data-scale-panel="reference">
+            <p class="hint">キャンバス上で既知の長さを2点指定します。</p>
+            <div class="reference-actions">
+              <button class="btn secondary" id="startCalibrationBtn">基準線を選ぶ</button>
+              <button class="btn ghost danger" id="deleteReferenceBtn" disabled>削除</button>
+            </div>
+            <label>基準線の実寸 <span><input id="referenceMm" type="number" min="0.01" step="0.1" placeholder="例: 50" /> mm</span></label>
+            <small id="referencePx">基準線: 未選択</small>
+          </div>
+          <div class="scale-input hidden" data-scale-panel="dpi">
+            <label>画像のDPI <span><input id="dpiInput" type="number" min="1" step="1" value="300" /> dpi</span></label>
+          </div>
+          <div class="calculated-size">
+            <span>計算上の実寸</span><b id="realSize">— × — mm</b>
+            <small id="pixelScale">1 px = — mm</small>
+          </div>
+        </section>
+
+        <section class="card color-card">
+          <div class="section-heading"><h2>カラーピッカー</h2><button class="btn mini" id="activateColorPickerBtn">画像から取得</button></div>
+          <div class="color-reading">
+            <span class="color-swatch" id="colorSwatch"></span>
+            <div><b id="colorHex">未取得</b><small id="colorRgb">画像上の色を選択してください</small></div>
+            <button class="icon-btn" id="copyColorBtn" title="カラーコードをコピー" disabled>⧉</button>
+          </div>
+          <div class="recent-colors" id="recentColors"></div>
+        </section>
+
+        <section class="card">
+          <div class="section-heading"><h2>スナップと表示</h2></div>
+          <label class="setting-row">スナップ距離 <span><input id="snapDistance" type="range" min="4" max="24" value="12" /><output>12 px</output></span></label>
+          <label class="setting-row">グリッド間隔 <span><input id="gridSize" type="number" min="2" step="1" value="10" /> mm</span></label>
+          <label class="check-row"><input id="snapImage" type="checkbox" checked /> 画像の辺・角・中心</label>
+          <label class="check-row"><input id="snapLogo" type="checkbox" checked /> ロゴの辺・角・中心</label>
+          <label class="check-row"><input id="snapPoints" type="checkbox" checked /> 既存の測定点</label>
+          <label class="check-row"><input id="snapGrid" type="checkbox" /> グリッド</label>
+          <label class="check-row"><input id="loupeToggle" type="checkbox" checked /> 選択時に拡大鏡を表示</label>
+          <label class="setting-row">小数点以下 <select id="precision"><option value="0">0桁</option><option value="1" selected>1桁</option><option value="2">2桁</option><option value="3">3桁</option></select></label>
+        </section>
+      </div>
+
+      <div class="tab-panel" id="logoPanel">
+        <section class="card" id="logoEmpty">
+          <div class="empty-mini"><span>◇</span><h2>ロゴがありません</h2><p>透明PNGやSVGにも対応しています。</p><label class="btn secondary full file-btn">ロゴを追加<input type="file" id="logoInputAlt" accept="image/png,image/jpeg,image/webp,image/svg+xml" /></label></div>
+        </section>
+        <div id="logoControls" hidden>
+          <section class="card">
+            <div class="section-heading"><h2>ロゴ画像</h2><label class="toggle"><input id="logoVisible" type="checkbox" checked /><span></span>表示</label></div>
+            <div class="logo-preview"><img id="logoPreview" alt="ロゴのプレビュー" /><div><b id="logoFileName">—</b><small id="logoPixelSize">—</small></div></div>
+            <button class="text-danger" id="removeLogoBtn">ロゴを削除</button>
+          </section>
+          <section class="card">
+            <div class="section-heading"><h2>位置とサイズ</h2></div>
+            <div class="field-grid two">
+              <label>X <span><input id="logoX" type="number" step="0.1" /> mm</span></label>
+              <label>Y <span><input id="logoY" type="number" step="0.1" /> mm</span></label>
+              <label>横幅 <span><input id="logoW" type="number" min="0.1" step="0.1" /> mm</span></label>
+              <label>縦幅 <span><input id="logoH" type="number" min="0.1" step="0.1" /> mm</span></label>
+            </div>
+            <label class="check-row"><input id="logoKeepRatio" type="checkbox" checked /> 縦横比を維持</label>
+            <label class="setting-row">回転 <span><input id="logoRotation" type="range" min="-180" max="180" value="0" /><output>0°</output></span></label>
+            <label class="setting-row">透明度 <span><input id="logoOpacity" type="range" min="10" max="100" value="100" /><output>100%</output></span></label>
+          </section>
+          <section class="card">
+            <div class="section-heading"><h2>固定</h2></div>
+            <label class="check-row lock"><input id="lockPosition" type="checkbox" /> <span>位置を固定<small>ドラッグ移動を防ぎます</small></span></label>
+            <label class="check-row lock"><input id="lockSize" type="checkbox" /> <span>サイズを固定<small>拡大・縮小を防ぎます</small></span></label>
+          </section>
+        </div>
+      </div>
+
+      <div class="tab-panel" id="resultsPanel">
+        <section class="card result-summary">
+          <div><small>測定数</small><b id="summaryCount">0</b></div>
+          <div><small>単位</small><b id="summaryUnit">px</b></div>
+          <button class="icon-btn" id="clearMeasurementsBtn" title="すべて削除">⌫</button>
+        </section>
+        <div class="result-list" id="resultList">
+          <div class="empty-mini" id="resultsEmpty"><span>⟷</span><h2>測定結果はまだありません</h2><p>左の「測定」を選び、画像上で2点を指定してください。</p></div>
+        </div>
+        <section class="card export-card">
+          <button class="btn secondary full" id="csvBtn">CSVを書き出す</button>
+          <button class="btn secondary full" id="pngBtn">測定画像を書き出す</button>
+        </section>
+      </div>
+    </aside>
+  </main>
+
+  <div class="modal-backdrop" id="calibrationModal" hidden>
+    <form class="modal" id="calibrationForm">
+      <div class="modal-icon">⌁</div><h2>基準線の実寸を入力</h2>
+      <p>選択した2点間は <b id="calibrationPxLabel">— px</b> です。</p>
+      <label class="modal-field"><input id="calibrationMmInput" type="number" min="0.01" step="0.1" required autofocus /><span>mm</span></label>
+      <div class="modal-actions"><button type="button" class="btn ghost" id="cancelCalibrationBtn">キャンセル</button><button class="btn primary">縮尺を設定</button></div>
+    </form>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
