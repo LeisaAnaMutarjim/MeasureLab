@@ -29,6 +29,7 @@
       <button class="tool" data-tool="measure" title="距離を測定 (M)"><span>⟷</span><small>測定</small></button>
       <button class="tool" data-tool="calibrate" title="基準線で校正 (C)"><span>⌁</span><small>校正</small></button>
       <button class="tool" data-tool="guide" title="補助線を追加 (G)"><span>＋</span><small>ガイド</small></button>
+      <button class="tool" data-tool="frames" title="A4枠を配置 (F)"><span>▦</span><small>A4枠</small></button>
       <button class="tool" data-tool="color" title="画像から色を取得 (I)"><span>◉</span><small>色取得</small></button>
       <button class="tool" data-tool="pan" title="表示を移動 (H / Space / ホイールクリック)"><span>✋</span><small>移動</small></button>
       <span class="rail-spacer"></span>
@@ -74,6 +75,7 @@
       <nav class="tabs" aria-label="設定パネル">
         <button class="tab active" data-tab="setup">設定</button>
         <button class="tab" data-tab="logo">ロゴ</button>
+        <button class="tab" data-tab="frames">A4枠</button>
         <button class="tab" data-tab="results">測定 <em id="measurementCount">0</em></button>
       </nav>
 
@@ -169,6 +171,67 @@
             <label class="check-row lock"><input id="lockPosition" type="checkbox" /> <span>位置を固定<small>ドラッグ移動を防ぎます</small></span></label>
             <label class="check-row lock"><input id="lockSize" type="checkbox" /> <span>サイズを固定<small>拡大・縮小を防ぎます</small></span></label>
           </section>
+        </div>
+      </div>
+
+      <div class="tab-panel" id="framesPanel">
+        <section class="card" id="frameIntro">
+          <div class="section-heading"><h2>A4枠レイアウト</h2><span class="badge" id="frameStatus">未配置</span></div>
+          <p class="hint">A4サイズの枠を行列状に配置します。縮尺未設定時は1pxを1mmとして扱います。</p>
+          <button class="btn primary full" id="enableFramesBtn">A4枠を配置</button>
+        </section>
+
+        <div id="frameControls" hidden>
+          <section class="card">
+            <div class="section-heading"><h2>枠の基本設定</h2><label class="toggle"><input id="frameVisible" type="checkbox" checked /><span></span>表示</label></div>
+            <div class="segmented two" id="frameOrientation">
+              <button class="active" data-orientation="portrait">縦 210×297</button>
+              <button data-orientation="landscape">横 297×210</button>
+            </div>
+            <div class="frame-scale-note" id="frameScaleNote">縮尺未設定：1px＝1mm</div>
+            <div class="field-grid two frame-fields">
+              <label>横方向の個数 <span><input id="frameColumns" type="number" min="1" max="100" step="1" value="1" /> 列</span></label>
+              <label>縦方向の個数 <span><input id="frameRows" type="number" min="1" max="100" step="1" value="1" /> 行</span></label>
+              <label>横の間隔 <span><input id="frameGapX" type="number" min="0" step="0.1" value="10" /> mm</span></label>
+              <label>縦の間隔 <span><input id="frameGapY" type="number" min="0" step="0.1" value="10" /> mm</span></label>
+            </div>
+            <div class="frame-summary"><span>枠の総数</span><b id="frameCount">1</b><small id="frameGroupSize">210 × 297 mm</small></div>
+          </section>
+
+          <section class="card">
+            <div class="section-heading"><h2>位置</h2><button class="btn mini" id="centerFramesBothBtn">中央に配置</button></div>
+            <div class="field-grid two frame-fields">
+              <label>画像左端から <span><input id="frameX" type="number" step="0.1" value="0" /> mm</span></label>
+              <label>画像上端から <span><input id="frameY" type="number" step="0.1" value="0" /> mm</span></label>
+            </div>
+            <label class="check-row"><input id="frameCenterX" type="checkbox" checked /> 横方向の中央を維持</label>
+            <label class="check-row"><input id="frameCenterY" type="checkbox" checked /> 縦方向の中央を維持</label>
+            <label class="check-row lock"><input id="frameLocked" type="checkbox" /> <span>位置を固定<small>キャンバス上での移動を防ぎます</small></span></label>
+          </section>
+
+          <section class="card">
+            <div class="section-heading"><h2>枠線</h2></div>
+            <div class="segmented two color-segment" id="frameColor">
+              <button class="active" data-color="#ffffff"><i class="color-chip white"></i>白</button>
+              <button data-color="#000000"><i class="color-chip black"></i>黒</button>
+            </div>
+            <label class="setting-row">線の太さ <span><input id="frameLineWidth" type="number" min="1" max="30" step="1" value="4" /> px</span></label>
+          </section>
+
+          <section class="card">
+            <div class="section-heading"><h2>寸法表示</h2><label class="toggle"><input id="frameShowDimensions" type="checkbox" checked /><span></span>表示</label></div>
+            <label class="check-row"><input id="frameDimLeft" type="checkbox" checked /> 画像左端までの距離</label>
+            <label class="check-row"><input id="frameDimTop" type="checkbox" checked /> 画像上端までの距離</label>
+            <label class="check-row"><input id="frameDimGapX" type="checkbox" checked /> 右隣の枠までの距離</label>
+            <label class="check-row"><input id="frameDimGapY" type="checkbox" checked /> 下隣の枠までの距離</label>
+            <p class="hint">右隣・下隣がない場合、その寸法は自動的に非表示になります。</p>
+          </section>
+
+          <section class="card frame-warning-card" id="frameWarningCard">
+            <div id="frameWarning">配置は画像内に収まっています。</div>
+          </section>
+
+          <button class="text-danger frame-reset" id="resetFramesBtn">A4枠の設定を削除</button>
         </div>
       </div>
 

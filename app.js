@@ -6,6 +6,7 @@
   const ctx = canvas.getContext('2d');
   const wrap = $('canvasWrap');
   const COLORS = ['#ff5a36', '#0d7e74', '#6d5bd0', '#da8b16', '#1e78bd', '#b84882'];
+  const defaultFrames = () => ({ enabled: false, visible: true, orientation: 'portrait', columns: 1, rows: 1, gapX: 10, gapY: 10, x: 0, y: 0, centerX: true, centerY: true, locked: false, color: '#ffffff', lineWidth: 4, showDimensions: true, dimLeft: true, dimTop: true, dimGapX: true, dimGapY: true });
 
   const state = {
     image: null, imageSrc: '', imageName: '', imageW: 0, imageH: 0,
@@ -15,6 +16,7 @@
     tool: 'select', zoom: 1, panX: 0, panY: 0, grid: false, gridMm: 10, snap: true, snapDistance: 12,
     snapImage: true, snapLogo: true, snapPoints: true, snapGrid: false, precision: 1, loupe: true,
     measurements: [], guides: [], draft: null, selectedMeasurement: null, selectedLogo: false,
+    frames: defaultFrames(), selectedFrames: false,
     currentColor: null, colorHistory: [],
     dragging: null, pointer: null, history: [], future: [], spaceDown: false
   };
@@ -23,7 +25,7 @@
     logoTransform: { ...state.logoTransform }, mmPerPx: state.mmPerPx, scaleMethod: state.scaleMethod,
     widthMm: state.widthMm, heightMm: state.heightMm, dpi: state.dpi,
     reference: state.reference ? JSON.parse(JSON.stringify(state.reference)) : null,
-    measurements: JSON.parse(JSON.stringify(state.measurements)), guides: JSON.parse(JSON.stringify(state.guides)),
+    measurements: JSON.parse(JSON.stringify(state.measurements)), guides: JSON.parse(JSON.stringify(state.guides)), frames: { ...state.frames },
     currentColor: state.currentColor ? { ...state.currentColor } : null, colorHistory: [...state.colorHistory]
   });
 
@@ -37,7 +39,7 @@
 
   function restoreSnapshot(s) {
     Object.assign(state.logoTransform, s.logoTransform);
-    Object.assign(state, { mmPerPx: s.mmPerPx, scaleMethod: s.scaleMethod, widthMm: s.widthMm, heightMm: s.heightMm, dpi: s.dpi, reference: s.reference, measurements: s.measurements, guides: s.guides, currentColor: s.currentColor, colorHistory: s.colorHistory || [] });
+    Object.assign(state, { mmPerPx: s.mmPerPx, scaleMethod: s.scaleMethod, widthMm: s.widthMm, heightMm: s.heightMm, dpi: s.dpi, reference: s.reference, measurements: s.measurements, guides: s.guides, frames: { ...defaultFrames(), ...(s.frames || {}) }, currentColor: s.currentColor, colorHistory: s.colorHistory || [] });
     syncAllControls(); render();
   }
 
@@ -127,6 +129,34 @@
     }
   }
 
+  function frameMetrics(frames=state.frames){
+    const frameW=frames.orientation==='landscape'?297:210,frameH=frames.orientation==='landscape'?210:297,groupW=frameW*frames.columns+frames.gapX*Math.max(0,frames.columns-1),groupH=frameH*frames.rows+frames.gapY*Math.max(0,frames.rows-1),mmPerImagePx=state.mmPerPx||1,toPx=1/mmPerImagePx;
+    return{frameW,frameH,groupW,groupH,mmPerImagePx,toPx,xPx:frames.x*toPx,yPx:frames.y*toPx,frameWPx:frameW*toPx,frameHPx:frameH*toPx,gapXPx:frames.gapX*toPx,gapYPx:frames.gapY*toPx,groupWPx:groupW*toPx,groupHPx:groupH*toPx,imageWMm:state.imageW*mmPerImagePx,imageHMm:state.imageH*mmPerImagePx};
+  }
+
+  function recalculateFrameCenter(){if(!state.image||!state.frames.enabled)return;const m=frameMetrics();if(state.frames.centerX)state.frames.x=(m.imageWMm-m.groupW)/2;if(state.frames.centerY)state.frames.y=(m.imageHMm-m.groupH)/2;}
+
+  function pointInFrameGroup(p){if(!state.frames.enabled||!state.frames.visible)return false;const m=frameMetrics();return p.x>=m.xPx&&p.x<=m.xPx+m.groupWPx&&p.y>=m.yPx&&p.y<=m.yPx+m.groupHPx;}
+
+  function drawDimensionArrow(c,a,b,text,color,fontSize,lineWidth){
+    const dark=color.toLowerCase()==='#000000',halo=dark?'rgba(255,255,255,.82)':'rgba(0,0,0,.68)',labelBg=dark?'rgba(255,255,255,.94)':'rgba(17,25,23,.94)',labelText=dark?'#111':'#fff',ang=Math.atan2(b.y-a.y,b.x-a.x),head=Math.max(6,fontSize*.42),mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+    const stroke=(strokeColor,width)=>{c.strokeStyle=strokeColor;c.lineWidth=width;c.beginPath();c.moveTo(a.x,a.y);c.lineTo(b.x,b.y);for(const[p,dir]of[[a,1],[b,-1]]){c.moveTo(p.x,p.y);c.lineTo(p.x+Math.cos(ang+dir*.55)*head*dir,p.y+Math.sin(ang+dir*.55)*head*dir);c.moveTo(p.x,p.y);c.lineTo(p.x+Math.cos(ang-dir*.55)*head*dir,p.y+Math.sin(ang-dir*.55)*head*dir);}c.stroke();};
+    c.save();c.lineCap='round';stroke(halo,lineWidth+3);stroke(color,lineWidth);c.font=`800 ${fontSize}px Arial, sans-serif`;c.textAlign='center';c.textBaseline='middle';const tw=c.measureText(text).width,padX=fontSize*.48,padY=fontSize*.28,boxW=tw+padX*2,boxH=fontSize+padY*2,cx=clamp(mid.x,boxW/2+4,state.viewportW-boxW/2-4),cy=clamp(mid.y,boxH/2+4,state.viewportH-boxH/2-4);c.fillStyle=labelBg;c.beginPath();roundRect(c,cx-boxW/2,cy-boxH/2,boxW,boxH,fontSize*.32);c.fill();c.strokeStyle=color;c.lineWidth=Math.max(1.5,lineWidth);c.stroke();c.fillStyle=labelText;c.fillText(text,cx,cy);c.restore();
+  }
+
+  function drawFrameLayout(c,z=state.zoom,offsetX=state.panX,offsetY=state.panY,exportMode=false){
+    const f=state.frames;if(!f.enabled||!f.visible||!state.image)return;const m=frameMetrics(),map=p=>({x:offsetX+p.x*z,y:offsetY+p.y*z}),lineWidth=clamp(f.lineWidth*z,exportMode?1:1,exportMode?30:14);
+    c.save();c.strokeStyle=f.color;c.lineWidth=lineWidth;c.lineJoin='miter';
+    for(let row=0;row<f.rows;row++)for(let col=0;col<f.columns;col++){const x=m.xPx+col*(m.frameWPx+m.gapXPx),y=m.yPx+row*(m.frameHPx+m.gapYPx),p=map({x,y});c.strokeRect(p.x,p.y,m.frameWPx*z,m.frameHPx*z);}
+    c.restore();
+    if(state.selectedFrames&&!exportMode){const p=map({x:m.xPx,y:m.yPx});c.save();c.strokeStyle='#0d7e74';c.lineWidth=2;c.setLineDash([7,4]);c.strokeRect(p.x-5,p.y-5,m.groupWPx*z+10,m.groupHPx*z+10);c.setLineDash([]);c.fillStyle='#0d7e74';for(const q of[[p.x-5,p.y-5],[p.x+m.groupWPx*z+5,p.y-5],[p.x+m.groupWPx*z+5,p.y+m.groupHPx*z+5],[p.x-5,p.y+m.groupHPx*z+5]])c.fillRect(q[0]-4,q[1]-4,8,8);c.restore();}
+    if(!f.showDimensions)return;const shortSide=exportMode?Math.min(state.viewportW,state.viewportH):600,fontSize=exportMode?clamp(Math.round(shortSide*.014),18,44):11,dimWidth=exportMode?clamp(Math.round(shortSide*.0015),2,6):1.5,frameCenterY=m.yPx+m.frameHPx/2,frameCenterX=m.xPx+m.frameWPx/2;
+    if(f.dimLeft)drawDimensionArrow(c,map({x:0,y:frameCenterY}),map({x:m.xPx,y:frameCenterY}),`${fmt(f.x)} mm`,f.color,fontSize,dimWidth);
+    if(f.dimTop)drawDimensionArrow(c,map({x:frameCenterX,y:0}),map({x:frameCenterX,y:m.yPx}),`${fmt(f.y)} mm`,f.color,fontSize,dimWidth);
+    if(f.dimGapX&&f.columns>1)drawDimensionArrow(c,map({x:m.xPx+m.frameWPx,y:frameCenterY}),map({x:m.xPx+m.frameWPx+m.gapXPx,y:frameCenterY}),`${fmt(f.gapX)} mm`,f.color,fontSize,dimWidth);
+    if(f.dimGapY&&f.rows>1)drawDimensionArrow(c,map({x:frameCenterX,y:m.yPx+m.frameHPx}),map({x:frameCenterX,y:m.yPx+m.frameHPx+m.gapYPx}),`${fmt(f.gapY)} mm`,f.color,fontSize,dimWidth);
+  }
+
   function drawPoint(p,color,active=false){const s=imageToScreen(p);ctx.save();ctx.fillStyle='#fff';ctx.strokeStyle=color;ctx.lineWidth=active?3:2;ctx.beginPath();ctx.arc(s.x,s.y,active?6:5,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.restore();}
 
   function measurementValues(m){const dx=Math.abs(m.b.x-m.a.x),dy=Math.abs(m.b.y-m.a.y),d=Math.hypot(dx,dy),k=state.mmPerPx||1;return{dx:dx*k,dy:dy*k,d:d*k,unit:state.mmPerPx?'mm':'px'};}
@@ -152,14 +182,14 @@
     if(!state.image)return;
     const p=imageToScreen({x:0,y:0});ctx.save();ctx.shadowColor='rgba(12,29,25,.18)';ctx.shadowBlur=24;ctx.shadowOffsetY=8;ctx.fillStyle='#fff';ctx.fillRect(p.x,p.y,state.imageW*state.zoom,state.imageH*state.zoom);ctx.restore();
     ctx.drawImage(state.image,p.x,p.y,state.imageW*state.zoom,state.imageH*state.zoom);
-    drawGrid();drawLogo();drawGuides();drawReference();state.measurements.filter(m=>m.visible!==false).forEach((m,i)=>drawMeasurement(m,i));if(state.draft?.a&&state.draft?.b)drawMeasurement({...state.draft,color:'#ff5a36'},0,true);drawSnapMarker();
+    drawGrid();drawLogo();drawFrameLayout(ctx);drawGuides();drawReference();state.measurements.filter(m=>m.visible!==false).forEach((m,i)=>drawMeasurement(m,i));if(state.draft?.a&&state.draft?.b)drawMeasurement({...state.draft,color:'#ff5a36'},0,true);drawSnapMarker();
   }
 
   function loadImageFile(file, asLogo=false) {
     if(!file||!file.type.startsWith('image/')){toast('画像ファイルを選択してください');return;}
     const reader=new FileReader();reader.onload=()=>{const img=new Image();img.onload=()=>{
       if(asLogo){pushHistory();state.logo=img;state.logoSrc=reader.result;state.logoName=file.name;state.logoNaturalW=img.naturalWidth;state.logoNaturalH=img.naturalHeight;const max=Math.min(state.imageW*.3||240,240);state.logoTransform.w=max;state.logoTransform.h=max*img.naturalHeight/img.naturalWidth;state.logoTransform.x=state.image?state.imageW/2-state.logoTransform.w/2:30;state.logoTransform.y=state.image?state.imageH/2-state.logoTransform.h/2:30;state.selectedLogo=true;showLogoControls();switchTab('logo');toast('ロゴを追加しました');}
-      else{state.image=img;state.imageSrc=reader.result;state.imageName=file.name;state.imageW=img.naturalWidth;state.imageH=img.naturalHeight;state.measurements=[];state.guides=[];state.mmPerPx=null;state.history=[];state.future=[];$('emptyState').style.display='none';updateImageMeta();setTimeout(fitImage,0);toast('画像を読み込みました');}
+      else{state.image=img;state.imageSrc=reader.result;state.imageName=file.name;state.imageW=img.naturalWidth;state.imageH=img.naturalHeight;state.measurements=[];state.guides=[];state.frames=defaultFrames();state.selectedFrames=false;state.mmPerPx=null;state.history=[];state.future=[];$('emptyState').style.display='none';updateImageMeta();setTimeout(fitImage,0);toast('画像を読み込みました');}
       syncAllControls();render();saveLocal();
     };img.onerror=()=>toast('画像を読み込めませんでした');img.src=reader.result;};reader.readAsDataURL(file);
   }
@@ -192,19 +222,34 @@
   function updateScaleUI(){
     if(state.mmPerPx){$('realSize').textContent=`${fmt(state.imageW*state.mmPerPx,2)} × ${fmt(state.imageH*state.mmPerPx,2)} mm`;$('pixelScale').textContent=`1 px = ${fmt(state.mmPerPx,4)} mm`;$('scaleStatus').textContent='縮尺設定済み';$('scaleStatus').classList.add('ready');$('summaryUnit').textContent='mm';}
     else{$('realSize').textContent='— × — mm';$('pixelScale').textContent='1 px = — mm';$('scaleStatus').textContent='縮尺未設定';$('scaleStatus').classList.remove('ready');$('summaryUnit').textContent='px';}
-    updateReferenceUI();
+    updateReferenceUI();recalculateFrameCenter();updateFrameUI();
   }
 
   function updateReferenceUI(){const ref=state.reference;$('deleteReferenceBtn').disabled=!ref;$('referencePx').textContent=ref?`基準線: ${fmt(distance(ref.a,ref.b),1)} px${ref.realMm?` / ${fmt(ref.realMm)} mm`:''}`:'基準線: 未選択';if(ref?.realMm)$('referenceMm').value=ref.realMm;}
 
+  function enableFrames(){
+    switchTab('frames');if(!state.image){toast('先に画像を読み込んでください');return;}if(!state.frames.enabled){pushHistory();state.frames={...defaultFrames(),enabled:true};recalculateFrameCenter();toast('A4枠を配置しました');}state.selectedFrames=true;state.selectedLogo=false;state.selectedMeasurement=null;setTool('frames');updateFrameUI();render();saveLocal();
+  }
+
+  function updateFrameUI(){
+    const f=state.frames,m=frameMetrics(),enabled=!!f.enabled;$('frameStatus').textContent=enabled?'配置中':'未配置';$('frameStatus').classList.toggle('ready',enabled);$('frameControls').hidden=!enabled;$('enableFramesBtn').textContent=enabled?'枠を選択':'A4枠を配置';if(!enabled)return;
+    $('frameVisible').checked=f.visible;$('frameColumns').value=f.columns;$('frameRows').value=f.rows;$('frameGapX').value=fmt(f.gapX,1);$('frameGapY').value=fmt(f.gapY,1);$('frameX').value=fmt(f.x,1);$('frameY').value=fmt(f.y,1);$('frameX').disabled=f.centerX;$('frameY').disabled=f.centerY;$('frameCenterX').checked=f.centerX;$('frameCenterY').checked=f.centerY;$('frameLocked').checked=f.locked;$('frameLineWidth').value=f.lineWidth;$('frameShowDimensions').checked=f.showDimensions;$('frameDimLeft').checked=f.dimLeft;$('frameDimTop').checked=f.dimTop;$('frameDimGapX').checked=f.dimGapX;$('frameDimGapY').checked=f.dimGapY;$('frameDimLeft').disabled=!f.showDimensions;$('frameDimTop').disabled=!f.showDimensions;$('frameDimGapX').disabled=!f.showDimensions||f.columns<2;$('frameDimGapY').disabled=!f.showDimensions||f.rows<2;$('frameCount').textContent=(f.columns*f.rows).toLocaleString();$('frameGroupSize').textContent=`${fmt(m.groupW)} × ${fmt(m.groupH)} mm`;
+    document.querySelectorAll('#frameOrientation button').forEach(b=>b.classList.toggle('active',b.dataset.orientation===f.orientation));document.querySelectorAll('#frameColor button').forEach(b=>b.classList.toggle('active',b.dataset.color.toLowerCase()===f.color.toLowerCase()));
+    $('frameScaleNote').textContent=state.mmPerPx?`縮尺設定済み：1px＝${fmt(state.mmPerPx,4)}mm`:'縮尺未設定：1px＝1mmとして配置';$('frameScaleNote').classList.toggle('ready',!!state.mmPerPx);
+    const overflowX=f.x<0||f.x+m.groupW>m.imageWMm,overflowY=f.y<0||f.y+m.groupH>m.imageHMm,card=$('frameWarningCard'),messages=[];card.classList.remove('warning','error');if(!state.mmPerPx)messages.push('縮尺未設定のため、1pxを1mmとして処理しています。');if(overflowX||overflowY){messages.push(`枠群が画像の${overflowX&&overflowY?'縦横両方向':overflowX?'横方向':'縦方向'}にはみ出しています。`);card.classList.add('error');}else if(!state.mmPerPx)card.classList.add('warning');$('frameWarning').textContent=messages.length?messages.join(' '):'配置は画像内に収まっています。';
+  }
+
+  function mutateFrames(mutator){if(!state.frames.enabled)return;pushHistory();mutator(state.frames);recalculateFrameCenter();updateFrameUI();render();saveLocal();}
+
   function activateScaleMethod(method,setState=true){if(setState)state.scaleMethod=method;document.querySelectorAll('#scaleMethod button').forEach(x=>x.classList.toggle('active',x.dataset.method===method));document.querySelectorAll('[data-scale-panel]').forEach(x=>x.classList.toggle('hidden',x.dataset.scalePanel!==method));}
 
-  function setTool(tool){state.tool=tool;document.querySelectorAll('.tool[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===tool));canvas.style.cursor=tool==='pan'?'grab':tool==='measure'||tool==='calibrate'||tool==='color'?'crosshair':'default';state.draft=null;$('statusMessage').textContent={select:'要素を選択・移動できます（Shiftで水平・垂直）',measure:'始点を選択してください',calibrate:'既知の距離の始点を選択してください',guide:'クリックして補助線を追加',color:'画像上の取得したい色をクリックしてください',pan:'ドラッグまたはホイールクリックで表示を移動'}[tool];render();}
+  function setTool(tool){state.tool=tool;document.querySelectorAll('.tool[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===tool));canvas.style.cursor=tool==='pan'?'grab':tool==='frames'?'move':tool==='measure'||tool==='calibrate'||tool==='color'?'crosshair':'default';state.draft=null;$('statusMessage').textContent={select:'要素を選択・移動できます（Shiftで水平・垂直）',measure:'始点を選択してください',calibrate:'既知の距離の始点を選択してください',guide:'クリックして補助線を追加',frames:'A4枠群をドラッグして移動できます',color:'画像上の取得したい色をクリックしてください',pan:'ドラッグまたはホイールクリックで表示を移動'}[tool];render();}
 
   function candidatePoints(){
     const out=[];
     if(state.snapImage){const w=state.imageW,h=state.imageH;[[0,0,'画像 左上'],[w,0,'画像 右上'],[w,h,'画像 右下'],[0,h,'画像 左下'],[w/2,h/2,'画像 中心'],[w/2,0,'画像 上辺'],[w,h/2,'画像 右辺'],[w/2,h,'画像 下辺'],[0,h/2,'画像 左辺']].forEach(([x,y,label])=>out.push({x,y,label}));}
     if(state.logo&&state.logoTransform.visible&&state.snapLogo){const c=logoCorners(),l=state.logoTransform;c.forEach((p,i)=>out.push({...p,label:`ロゴ ${['左上','右上','右下','左下'][i]}`}));out.push({x:l.x+l.w/2,y:l.y+l.h/2,label:'ロゴ 中心'});for(let i=0;i<4;i++){const n=c[(i+1)%4];out.push({x:(c[i].x+n.x)/2,y:(c[i].y+n.y)/2,label:'ロゴ 辺'});}}
+    if(state.frames.enabled&&state.frames.visible){const m=frameMetrics(),x=m.xPx,y=m.yPx,w=m.groupWPx,h=m.groupHPx;[[x,y,'枠群 左上'],[x+w,y,'枠群 右上'],[x+w,y+h,'枠群 右下'],[x,y+h,'枠群 左下'],[x+w/2,y+h/2,'枠群 中心']].forEach(([px,py,label])=>out.push({x:px,y:py,label}));}
     if(state.snapPoints)state.measurements.forEach((m,i)=>{out.push({...m.a,label:`測定${i+1} 始点`},{...m.b,label:`測定${i+1} 終点`});});
     return out;
   }
@@ -235,10 +280,12 @@
       return;
     }
     if(state.tool==='guide'){const vertical=e.shiftKey;pushHistory();state.guides.push({axis:vertical?'x':'y',value:vertical?p.x:p.y});toast(vertical?'垂直ガイドを追加しました':'水平ガイドを追加しました');render();return;}
+    if(state.tool==='frames'&&pointInFrameGroup(raw)){state.selectedFrames=true;state.selectedLogo=false;state.selectedMeasurement=null;switchTab('frames');if(!state.frames.locked){pushHistory();state.dragging={type:'frame-group',start:raw,initial:{...state.frames}};}render();return;}
     const handle=hitLogoHandle(s);if(handle&&!state.logoTransform.lockSize){pushHistory();state.dragging={type:handle,start:p,initial:{...state.logoTransform}};return;}
-    const hit=hitMeasurement(raw);if(hit){pushHistory();state.selectedMeasurement=hit.m.id;state.selectedLogo=false;state.dragging=hit.key?{type:'measure-point',m:hit.m,key:hit.key}:{type:'measure-line',m:hit.m,start:raw,a:{...hit.m.a},b:{...hit.m.b}};switchTab('results');renderResults();render();return;}
-    if(pointInLogo(raw)){state.selectedLogo=true;state.selectedMeasurement=null;if(!state.logoTransform.lockPosition){pushHistory();state.dragging={type:'logo',start:raw,initial:{...state.logoTransform}};}switchTab('logo');render();return;}
-    state.selectedLogo=false;state.selectedMeasurement=null;renderResults();render();
+    const hit=hitMeasurement(raw);if(hit){pushHistory();state.selectedMeasurement=hit.m.id;state.selectedLogo=false;state.selectedFrames=false;state.dragging=hit.key?{type:'measure-point',m:hit.m,key:hit.key}:{type:'measure-line',m:hit.m,start:raw,a:{...hit.m.a},b:{...hit.m.b}};switchTab('results');renderResults();render();return;}
+    if(pointInLogo(raw)){state.selectedLogo=true;state.selectedMeasurement=null;state.selectedFrames=false;if(!state.logoTransform.lockPosition){pushHistory();state.dragging={type:'logo',start:raw,initial:{...state.logoTransform}};}switchTab('logo');render();return;}
+    if(state.tool==='select'&&pointInFrameGroup(raw)){state.selectedFrames=true;state.selectedLogo=false;state.selectedMeasurement=null;switchTab('frames');if(!state.frames.locked){pushHistory();state.dragging={type:'frame-group',start:raw,initial:{...state.frames}};}render();return;}
+    state.selectedLogo=false;state.selectedMeasurement=null;state.selectedFrames=false;renderResults();render();
   }
 
   function onPointerMove(e){
@@ -247,6 +294,7 @@
     if(!state.dragging){render();return;}
     const d=state.dragging;
     if(d.type==='pan'){state.panX=d.panX+s.x-d.start.x;state.panY=d.panY+s.y-d.start.y;render();return;}
+    if(d.type==='frame-group'){let dx=(raw.x-d.start.x)*(state.mmPerPx||1),dy=(raw.y-d.start.y)*(state.mmPerPx||1);if(e.shiftKey){if(Math.abs(dx)>=Math.abs(dy))dy=0;else dx=0;}state.frames.x=d.initial.x+dx;state.frames.y=d.initial.y+dy;if(Math.abs(dx)>.001)state.frames.centerX=false;if(Math.abs(dy)>.001)state.frames.centerY=false;updateFrameUI();render();return;}
     if(d.type==='logo'){let dx=raw.x-d.start.x,dy=raw.y-d.start.y;if(e.shiftKey){if(Math.abs(dx)>=Math.abs(dy))dy=0;else dx=0;}state.logoTransform.x=d.initial.x+dx;state.logoTransform.y=d.initial.y+dy;updateLogoInputs();render();return;}
     if(d.type==='rotate'){const l=d.initial,c={x:l.x+l.w/2,y:l.y+l.h/2};state.logoTransform.rotation=Math.atan2(raw.y-c.y,raw.x-c.x)*180/Math.PI+90;updateLogoInputs();render();return;}
     if(d.type.startsWith('resize')){const l=d.initial,index=+d.type.split('-')[1],signs=[[-1,-1],[1,-1],[1,1],[-1,1]][index],sx=signs[0],sy=signs[1],c={x:l.x+l.w/2,y:l.y+l.h/2},r=-l.rotation*Math.PI/180,dx=raw.x-c.x,dy=raw.y-c.y,q={x:dx*Math.cos(r)-dy*Math.sin(r),y:dx*Math.sin(r)+dy*Math.cos(r)},opp={x:-sx*l.w/2,y:-sy*l.h/2};let nw=Math.max(5,sx*(q.x-opp.x)),nh=Math.max(5,sy*(q.y-opp.y));if(state.logoTransform.keepRatio){const ar=l.w/l.h;if(nw/l.w>=nh/l.h)nh=nw/ar;else nw=nh*ar;}const dragged={x:opp.x+sx*nw,y:opp.y+sy*nh},localCenter={x:(opp.x+dragged.x)/2,y:(opp.y+dragged.y)/2},rr=l.rotation*Math.PI/180,newCenter={x:c.x+localCenter.x*Math.cos(rr)-localCenter.y*Math.sin(rr),y:c.y+localCenter.x*Math.sin(rr)+localCenter.y*Math.cos(rr)};state.logoTransform.w=nw;state.logoTransform.h=nh;state.logoTransform.x=newCenter.x-nw/2;state.logoTransform.y=newCenter.y-nh/2;updateLogoInputs();render();return;}
@@ -254,7 +302,7 @@
     if(d.type==='measure-line'){let dx=raw.x-d.start.x,dy=raw.y-d.start.y;if(e.shiftKey){if(Math.abs(dx)>=Math.abs(dy))dy=0;else dx=0;}d.m.a={x:d.a.x+dx,y:d.a.y+dy};d.m.b={x:d.b.x+dx,y:d.b.y+dy};renderResults();render();}
   }
 
-  function onPointerUp(){if(state.dragging&&state.dragging.type!=='pan'){saveLocal();syncAllControls();}state.dragging=null;canvas.style.cursor=state.tool==='pan'?'grab':state.tool==='measure'||state.tool==='calibrate'||state.tool==='color'?'crosshair':'default';hideLoupe();}
+  function onPointerUp(){if(state.dragging&&state.dragging.type!=='pan'){saveLocal();syncAllControls();}state.dragging=null;canvas.style.cursor=state.tool==='pan'?'grab':state.tool==='frames'?'move':state.tool==='measure'||state.tool==='calibrate'||state.tool==='color'?'crosshair':'default';hideLoupe();}
 
   function updateLoupe(screen,p){if(!state.loupe)return;const box=$('loupe'),lc=box.querySelector('canvas'),lctx=lc.getContext('2d');box.hidden=false;let x=screen.x+22,y=screen.y-180;if(x+150>state.viewportW)x=screen.x-172;if(y<5)y=screen.y+22;box.style.left=x+'px';box.style.top=y+'px';lctx.imageSmoothingEnabled=false;lctx.clearRect(0,0,140,140);const crop=28;lctx.drawImage(canvas,(screen.x-crop/2)*state.dpr,(screen.y-crop/2)*state.dpr,crop*state.dpr,crop*state.dpr,0,0,140,140);lctx.strokeStyle='#ff5a36';lctx.lineWidth=1;lctx.beginPath();lctx.moveTo(70,0);lctx.lineTo(70,140);lctx.moveTo(0,70);lctx.lineTo(140,70);lctx.stroke();box.querySelector('span').textContent=`${fmt(p.x,1)} px, ${fmt(p.y,1)} px`;}
   function hideLoupe(){$('loupe').hidden=true;}
@@ -262,7 +310,7 @@
 
   function renderResults(){
     const list=$('resultList');list.querySelectorAll('.result-item').forEach(n=>n.remove());$('resultsEmpty').style.display=state.measurements.length?'none':'block';$('measurementCount').textContent=state.measurements.length;$('summaryCount').textContent=state.measurements.length;
-    state.measurements.forEach((m,i)=>{const v=measurementValues(m),el=document.createElement('article');el.className='result-item'+(state.selectedMeasurement===m.id?' selected':'');el.dataset.id=m.id;el.innerHTML=`<div class="result-head"><span class="result-color" style="background:${m.color}"></span><input class="result-name" value="${escapeHtml(m.name)}" aria-label="測定名"><button class="result-delete" title="削除">×</button></div><div class="result-distance">${fmt(v.d)} <small>${v.unit}</small></div><div class="result-components"><span>水平 ${fmt(v.dx)} ${v.unit}</span><span>垂直 ${fmt(v.dy)} ${v.unit}</span></div>${m.snapA||m.snapB?`<div class="snap-tags">${m.snapA?`<span>${escapeHtml(m.snapA)}</span>`:''}${m.snapB?`<span>${escapeHtml(m.snapB)}</span>`:''}</div>`:''}`;el.addEventListener('click',()=>{state.selectedMeasurement=m.id;state.selectedLogo=false;renderResults();render();});el.querySelector('.result-name').addEventListener('change',e=>{pushHistory();m.name=e.target.value;saveLocal();});el.querySelector('.result-delete').addEventListener('click',e=>{e.stopPropagation();pushHistory();state.measurements=state.measurements.filter(x=>x.id!==m.id);renderResults();render();saveLocal();});list.appendChild(el);});
+    state.measurements.forEach((m,i)=>{const v=measurementValues(m),el=document.createElement('article');el.className='result-item'+(state.selectedMeasurement===m.id?' selected':'');el.dataset.id=m.id;el.innerHTML=`<div class="result-head"><span class="result-color" style="background:${m.color}"></span><input class="result-name" value="${escapeHtml(m.name)}" aria-label="測定名"><button class="result-delete" title="削除">×</button></div><div class="result-distance">${fmt(v.d)} <small>${v.unit}</small></div><div class="result-components"><span>水平 ${fmt(v.dx)} ${v.unit}</span><span>垂直 ${fmt(v.dy)} ${v.unit}</span></div>${m.snapA||m.snapB?`<div class="snap-tags">${m.snapA?`<span>${escapeHtml(m.snapA)}</span>`:''}${m.snapB?`<span>${escapeHtml(m.snapB)}</span>`:''}</div>`:''}`;el.addEventListener('click',()=>{state.selectedMeasurement=m.id;state.selectedLogo=false;state.selectedFrames=false;renderResults();render();});el.querySelector('.result-name').addEventListener('change',e=>{pushHistory();m.name=e.target.value;saveLocal();});el.querySelector('.result-delete').addEventListener('click',e=>{e.stopPropagation();pushHistory();state.measurements=state.measurements.filter(x=>x.id!==m.id);renderResults();render();saveLocal();});list.appendChild(el);});
   }
   function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
@@ -280,8 +328,8 @@
   }
 
   function download(name,blob){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),500);}
-  function exportProject(){if(!state.image){toast('先に画像を読み込んでください');return;}const data={version:1,createdAt:new Date().toISOString(),image:{name:state.imageName,src:state.imageSrc},logo:state.logo?{name:state.logoName,src:state.logoSrc,naturalW:state.logoNaturalW,naturalH:state.logoNaturalH,transform:state.logoTransform}:null,settings:{mmPerPx:state.mmPerPx,scaleMethod:state.scaleMethod,widthMm:state.widthMm,heightMm:state.heightMm,dpi:state.dpi,reference:state.reference,grid:state.grid,gridMm:state.gridMm,snap:state.snap,snapDistance:state.snapDistance,snapImage:state.snapImage,snapLogo:state.snapLogo,snapPoints:state.snapPoints,snapGrid:state.snapGrid,precision:state.precision},measurements:state.measurements,guides:state.guides,currentColor:state.currentColor,colorHistory:state.colorHistory};download(`measurelab-${Date.now()}.json`,new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));toast('プロジェクトを保存しました');}
-  function importProject(file){const r=new FileReader();r.onload=async()=>{try{const d=JSON.parse(r.result);if(!d.image?.src)throw new Error();const img=await loadSrc(d.image.src);state.image=img;state.imageSrc=d.image.src;state.imageName=d.image.name||'project-image';state.imageW=img.naturalWidth;state.imageH=img.naturalHeight;Object.assign(state,d.settings||{});state.measurements=d.measurements||[];state.guides=d.guides||[];state.currentColor=d.currentColor||null;state.colorHistory=d.colorHistory||[];if(d.logo?.src){state.logo=await loadSrc(d.logo.src);state.logoSrc=d.logo.src;state.logoName=d.logo.name;state.logoNaturalW=d.logo.naturalW||state.logo.naturalWidth;state.logoNaturalH=d.logo.naturalH||state.logo.naturalHeight;Object.assign(state.logoTransform,d.logo.transform||{});}else{state.logo=null;}$('emptyState').style.display='none';syncAllControls();fitImage();toast('プロジェクトを読み込みました');}catch{toast('プロジェクトファイルを読み込めませんでした');}};r.readAsText(file);}
+  function exportProject(){if(!state.image){toast('先に画像を読み込んでください');return;}const data={version:2,createdAt:new Date().toISOString(),image:{name:state.imageName,src:state.imageSrc},logo:state.logo?{name:state.logoName,src:state.logoSrc,naturalW:state.logoNaturalW,naturalH:state.logoNaturalH,transform:state.logoTransform}:null,settings:{mmPerPx:state.mmPerPx,scaleMethod:state.scaleMethod,widthMm:state.widthMm,heightMm:state.heightMm,dpi:state.dpi,reference:state.reference,grid:state.grid,gridMm:state.gridMm,snap:state.snap,snapDistance:state.snapDistance,snapImage:state.snapImage,snapLogo:state.snapLogo,snapPoints:state.snapPoints,snapGrid:state.snapGrid,precision:state.precision},measurements:state.measurements,guides:state.guides,frames:state.frames,currentColor:state.currentColor,colorHistory:state.colorHistory};download(`measurelab-${Date.now()}.json`,new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));toast('プロジェクトを保存しました');}
+  function importProject(file){const r=new FileReader();r.onload=async()=>{try{const d=JSON.parse(r.result);if(!d.image?.src)throw new Error();const img=await loadSrc(d.image.src);state.image=img;state.imageSrc=d.image.src;state.imageName=d.image.name||'project-image';state.imageW=img.naturalWidth;state.imageH=img.naturalHeight;Object.assign(state,d.settings||{});state.measurements=d.measurements||[];state.guides=d.guides||[];state.frames={...defaultFrames(),...(d.frames||{})};state.currentColor=d.currentColor||null;state.colorHistory=d.colorHistory||[];if(d.logo?.src){state.logo=await loadSrc(d.logo.src);state.logoSrc=d.logo.src;state.logoName=d.logo.name;state.logoNaturalW=d.logo.naturalW||state.logo.naturalWidth;state.logoNaturalH=d.logo.naturalH||state.logo.naturalHeight;Object.assign(state.logoTransform,d.logo.transform||{});}else{state.logo=null;}$('emptyState').style.display='none';syncAllControls();fitImage();toast('プロジェクトを読み込みました');}catch{toast('プロジェクトファイルを読み込めませんでした');}};r.readAsText(file);}
   function loadSrc(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src;});}
   function exportCsv(){if(!state.measurements.length){toast('測定結果がありません');return;}const rows=[['No','名前','距離','水平差','垂直差','単位','始点X','始点Y','終点X','終点Y','始点スナップ','終点スナップ']];state.measurements.forEach((m,i)=>{const v=measurementValues(m),k=state.mmPerPx||1;rows.push([i+1,m.name,fmt(v.d),fmt(v.dx),fmt(v.dy),v.unit,fmt(m.a.x*k),fmt(m.a.y*k),fmt(m.b.x*k),fmt(m.b.y*k),m.snapA||'',m.snapB||'']);});const csv='\ufeff'+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');download('measurements.csv',new Blob([csv],{type:'text/csv;charset=utf-8'}));}
   function exportPng(){if(!state.image){toast('画像がありません');return;}const prev={z:state.zoom,x:state.panX,y:state.panY,vw:state.viewportW,vh:state.viewportH,selectedLogo:state.selectedLogo};const out=document.createElement('canvas'),scale=Math.min(1,4000/Math.max(state.imageW,state.imageH));out.width=Math.round(state.imageW*scale);out.height=Math.round(state.imageH*scale);const octx=out.getContext('2d');state.zoom=scale;state.panX=0;state.panY=0;state.viewportW=out.width;state.viewportH=out.height;state.selectedLogo=false;drawExport(octx);Object.assign(state,{zoom:prev.z,panX:prev.x,panY:prev.y,viewportW:prev.vw,viewportH:prev.vh,selectedLogo:prev.selectedLogo});out.toBlob(b=>download('measurelab-result.png',b),'image/png');render();}
@@ -289,6 +337,7 @@
     const z=state.zoom,shortSide=Math.min(state.viewportW,state.viewportH),lineWidth=clamp(Math.round(shortSide*.0022),3,9),fontSize=clamp(Math.round(shortSide*.019),24,58);
     c.drawImage(state.image,0,0,state.imageW*z,state.imageH*z);
     if(state.logo&&state.logoTransform.visible){const l=state.logoTransform;c.save();c.translate((l.x+l.w/2)*z,(l.y+l.h/2)*z);c.rotate(l.rotation*Math.PI/180);c.globalAlpha=l.opacity;c.drawImage(state.logo,-l.w*z/2,-l.h*z/2,l.w*z,l.h*z);c.restore();}
+    drawFrameLayout(c,z,0,0,true);
     const items=state.measurements.filter(m=>m.visible!==false).map((m,i)=>({m,a:{x:m.a.x*z,y:m.a.y*z},b:{x:m.b.x*z,y:m.b.y*z},color:m.color||COLORS[i%COLORS.length],value:measurementValues(m)}));
     c.lineCap='round';
     items.forEach(item=>{const{a,b,color}=item;c.strokeStyle='rgba(255,255,255,.88)';c.lineWidth=lineWidth+4;c.beginPath();c.moveTo(a.x,a.y);c.lineTo(b.x,b.y);c.stroke();c.strokeStyle=color;c.lineWidth=lineWidth;c.beginPath();c.moveTo(a.x,a.y);c.lineTo(b.x,b.y);c.stroke();for(const p of[a,b]){c.fillStyle='#fff';c.beginPath();c.arc(p.x,p.y,lineWidth*2.4,0,Math.PI*2);c.fill();c.fillStyle=color;c.beginPath();c.arc(p.x,p.y,lineWidth*1.55,0,Math.PI*2);c.fill();}});
@@ -296,10 +345,10 @@
     items.forEach(item=>{const text=`${fmt(item.value.d)} ${item.value.unit}`,textWidth=c.measureText(text).width,padX=fontSize*.48,padY=fontSize*.28,boxW=textWidth+padX*2,boxH=fontSize+padY*2,midX=(item.a.x+item.b.x)/2,midY=(item.a.y+item.b.y)/2,cx=clamp(midX,boxW/2+5,state.viewportW-boxW/2-5),cy=clamp(midY,boxH/2+5,state.viewportH-boxH/2-5);c.save();c.shadowColor='rgba(0,0,0,.5)';c.shadowBlur=fontSize*.28;c.shadowOffsetY=fontSize*.1;c.fillStyle='rgba(17,25,23,.92)';c.beginPath();roundRect(c,cx-boxW/2,cy-boxH/2,boxW,boxH,fontSize*.34);c.fill();c.shadowColor='transparent';c.strokeStyle=item.color;c.lineWidth=Math.max(3,lineWidth);c.stroke();c.fillStyle='#fff';c.fillText(text,cx,cy+fontSize*.02);c.restore();});
   }
 
-  function workspaceRecord(){return{savedAt:Date.now(),image:state.image?{name:state.imageName,src:state.imageSrc}:null,logo:state.logo?{name:state.logoName,src:state.logoSrc,naturalW:state.logoNaturalW,naturalH:state.logoNaturalH}:null,settings:{mmPerPx:state.mmPerPx,scaleMethod:state.scaleMethod,widthMm:state.widthMm,heightMm:state.heightMm,dpi:state.dpi,reference:state.reference,grid:state.grid,gridMm:state.gridMm,snap:state.snap,snapDistance:state.snapDistance,snapImage:state.snapImage,snapLogo:state.snapLogo,snapPoints:state.snapPoints,snapGrid:state.snapGrid,precision:state.precision,loupe:state.loupe},measurements:state.measurements,guides:state.guides,logoTransform:state.logoTransform,currentColor:state.currentColor,colorHistory:state.colorHistory};}
+  function workspaceRecord(){return{savedAt:Date.now(),image:state.image?{name:state.imageName,src:state.imageSrc}:null,logo:state.logo?{name:state.logoName,src:state.logoSrc,naturalW:state.logoNaturalW,naturalH:state.logoNaturalH}:null,settings:{mmPerPx:state.mmPerPx,scaleMethod:state.scaleMethod,widthMm:state.widthMm,heightMm:state.heightMm,dpi:state.dpi,reference:state.reference,grid:state.grid,gridMm:state.gridMm,snap:state.snap,snapDistance:state.snapDistance,snapImage:state.snapImage,snapLogo:state.snapLogo,snapPoints:state.snapPoints,snapGrid:state.snapGrid,precision:state.precision,loupe:state.loupe},measurements:state.measurements,guides:state.guides,frames:state.frames,logoTransform:state.logoTransform,currentColor:state.currentColor,colorHistory:state.colorHistory};}
   function openWorkspaceDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open('measurelab',1);req.onupgradeneeded=()=>req.result.createObjectStore('workspace');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   async function persistWorkspace(){try{const db=await openWorkspaceDb();const tx=db.transaction('workspace','readwrite');tx.objectStore('workspace').put(workspaceRecord(),'latest');tx.oncomplete=()=>db.close();}catch{}}
-  async function restoreWorkspace(){try{const db=await openWorkspaceDb();const data=await new Promise((resolve,reject)=>{const tx=db.transaction('workspace');const req=tx.objectStore('workspace').get('latest');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});db.close();if(!data?.image?.src)return;state.image=await loadSrc(data.image.src);state.imageSrc=data.image.src;state.imageName=data.image.name||'autosave-image';state.imageW=state.image.naturalWidth;state.imageH=state.image.naturalHeight;Object.assign(state,data.settings||{});state.measurements=data.measurements||[];state.guides=data.guides||[];state.currentColor=data.currentColor||null;state.colorHistory=data.colorHistory||[];Object.assign(state.logoTransform,data.logoTransform||{});if(data.logo?.src){state.logo=await loadSrc(data.logo.src);state.logoSrc=data.logo.src;state.logoName=data.logo.name||'logo';state.logoNaturalW=data.logo.naturalW||state.logo.naturalWidth;state.logoNaturalH=data.logo.naturalH||state.logo.naturalHeight;}$('emptyState').style.display='none';syncAllControls();fitImage();toast('前回の作業を自動復元しました');}catch{}}
+  async function restoreWorkspace(){try{const db=await openWorkspaceDb();const data=await new Promise((resolve,reject)=>{const tx=db.transaction('workspace');const req=tx.objectStore('workspace').get('latest');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});db.close();if(!data?.image?.src)return;state.image=await loadSrc(data.image.src);state.imageSrc=data.image.src;state.imageName=data.image.name||'autosave-image';state.imageW=state.image.naturalWidth;state.imageH=state.image.naturalHeight;Object.assign(state,data.settings||{});state.measurements=data.measurements||[];state.guides=data.guides||[];state.frames={...defaultFrames(),...(data.frames||{})};state.currentColor=data.currentColor||null;state.colorHistory=data.colorHistory||[];Object.assign(state.logoTransform,data.logoTransform||{});if(data.logo?.src){state.logo=await loadSrc(data.logo.src);state.logoSrc=data.logo.src;state.logoName=data.logo.name||'logo';state.logoNaturalW=data.logo.naturalW||state.logo.naturalWidth;state.logoNaturalH=data.logo.naturalH||state.logo.naturalHeight;}$('emptyState').style.display='none';syncAllControls();fitImage();toast('前回の作業を自動復元しました');}catch{}}
   function saveLocal(){try{const d=workspaceRecord();delete d.image;delete d.logo;localStorage.setItem('measurelab-settings',JSON.stringify(d));clearTimeout(saveLocal.timer);saveLocal.timer=setTimeout(persistWorkspace,250);}catch{}}
   function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.classList.remove('show'),2200);}
 
@@ -307,7 +356,7 @@
     window.addEventListener('resize',resizeCanvas);new ResizeObserver(resizeCanvas).observe(wrap);
     ['imageInput','emptyImageInput'].forEach(id=>$(id).addEventListener('change',e=>{loadImageFile(e.target.files[0]);e.target.value='';}));
     ['logoInput','logoInputAlt'].forEach(id=>$(id).addEventListener('change',e=>{loadImageFile(e.target.files[0],true);e.target.value='';}));
-    document.querySelectorAll('.tool[data-tool]').forEach(b=>b.addEventListener('click',()=>setTool(b.dataset.tool)));
+    document.querySelectorAll('.tool[data-tool]').forEach(b=>b.addEventListener('click',()=>b.dataset.tool==='frames'?enableFrames():setTool(b.dataset.tool)));
     document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
     document.querySelectorAll('#scaleMethod button').forEach(b=>b.addEventListener('click',()=>activateScaleMethod(b.dataset.method)));
     $('widthMm').addEventListener('change',e=>applyScale('width',+e.target.value));$('heightMm').addEventListener('change',e=>applyScale('height',+e.target.value));$('dpiInput').addEventListener('change',e=>{state.dpi=+e.target.value;applyScale('dpi',state.dpi);});
@@ -324,11 +373,29 @@
     $('undoBtn').addEventListener('click',undo);$('redoBtn').addEventListener('click',redo);$('exportProjectBtn').addEventListener('click',exportProject);$('importProjectBtn').addEventListener('click',()=>$('projectInput').click());$('projectInput').addEventListener('change',e=>importProject(e.target.files[0]));
     $('csvBtn').addEventListener('click',exportCsv);$('pngBtn').addEventListener('click',exportPng);$('clearMeasurementsBtn').addEventListener('click',()=>{if(!state.measurements.length)return;pushHistory();state.measurements=[];renderResults();render();saveLocal();toast('測定結果をすべて削除しました');});
     $('activateColorPickerBtn').addEventListener('click',()=>setTool('color'));$('copyColorBtn').addEventListener('click',()=>copyColor());
+    $('enableFramesBtn').addEventListener('click',enableFrames);
+    document.querySelectorAll('#frameOrientation button').forEach(b=>b.addEventListener('click',()=>mutateFrames(f=>{f.orientation=b.dataset.orientation;})));
+    document.querySelectorAll('#frameColor button').forEach(b=>b.addEventListener('click',()=>mutateFrames(f=>{f.color=b.dataset.color;})));
+    $('frameColumns').addEventListener('change',e=>mutateFrames(f=>{f.columns=clamp(Math.round(+e.target.value||1),1,100);}));
+    $('frameRows').addEventListener('change',e=>mutateFrames(f=>{f.rows=clamp(Math.round(+e.target.value||1),1,100);}));
+    $('frameGapX').addEventListener('change',e=>mutateFrames(f=>{f.gapX=Math.max(0,+e.target.value||0);}));
+    $('frameGapY').addEventListener('change',e=>mutateFrames(f=>{f.gapY=Math.max(0,+e.target.value||0);}));
+    $('frameX').addEventListener('change',e=>mutateFrames(f=>{f.centerX=false;f.x=+e.target.value||0;}));
+    $('frameY').addEventListener('change',e=>mutateFrames(f=>{f.centerY=false;f.y=+e.target.value||0;}));
+    $('frameLineWidth').addEventListener('change',e=>mutateFrames(f=>{f.lineWidth=clamp(Math.round(+e.target.value||1),1,30);}));
+    $('frameVisible').addEventListener('change',e=>mutateFrames(f=>{f.visible=e.target.checked;}));
+    $('frameCenterX').addEventListener('change',e=>mutateFrames(f=>{f.centerX=e.target.checked;}));
+    $('frameCenterY').addEventListener('change',e=>mutateFrames(f=>{f.centerY=e.target.checked;}));
+    $('frameLocked').addEventListener('change',e=>mutateFrames(f=>{f.locked=e.target.checked;}));
+    $('frameShowDimensions').addEventListener('change',e=>mutateFrames(f=>{f.showDimensions=e.target.checked;}));
+    [['frameDimLeft','dimLeft'],['frameDimTop','dimTop'],['frameDimGapX','dimGapX'],['frameDimGapY','dimGapY']].forEach(([id,key])=>$(id).addEventListener('change',e=>mutateFrames(f=>{f[key]=e.target.checked;})));
+    $('centerFramesBothBtn').addEventListener('click',()=>mutateFrames(f=>{f.centerX=true;f.centerY=true;}));
+    $('resetFramesBtn').addEventListener('click',()=>{if(!state.frames.enabled)return;pushHistory();state.frames=defaultFrames();state.selectedFrames=false;updateFrameUI();setTool('select');render();saveLocal();toast('A4枠の設定を削除しました');});
     $('removeLogoBtn').addEventListener('click',()=>{pushHistory();state.logo=null;state.logoSrc='';state.selectedLogo=false;$('logoEmpty').hidden=false;$('logoControls').hidden=true;render();saveLocal();toast('ロゴを削除しました');});
     [['logoVisible','visible'],['logoKeepRatio','keepRatio'],['lockPosition','lockPosition'],['lockSize','lockSize']].forEach(([id,key])=>$(id).addEventListener('change',e=>{pushHistory();state.logoTransform[key]=e.target.checked;render();saveLocal();}));
     $('logoRotation').addEventListener('pointerdown',pushHistory);$('logoRotation').addEventListener('input',e=>{state.logoTransform.rotation=+e.target.value;e.target.nextElementSibling.textContent=e.target.value+'°';render();});$('logoRotation').addEventListener('change',saveLocal);$('logoOpacity').addEventListener('pointerdown',pushHistory);$('logoOpacity').addEventListener('input',e=>{state.logoTransform.opacity=+e.target.value/100;e.target.nextElementSibling.textContent=e.target.value+'%';render();});$('logoOpacity').addEventListener('change',saveLocal);
     [['logoX','x'],['logoY','y'],['logoW','w'],['logoH','h']].forEach(([id,key])=>$(id).addEventListener('change',e=>{pushHistory();const k=state.mmPerPx||1,old=state.logoTransform[key];state.logoTransform[key]=+e.target.value/k;if((key==='w'||key==='h')&&state.logoTransform.keepRatio){const ar=state.logoNaturalW/state.logoNaturalH;if(key==='w')state.logoTransform.h=state.logoTransform.w/ar;else state.logoTransform.w=state.logoTransform.h*ar;}if(!Number.isFinite(state.logoTransform[key]))state.logoTransform[key]=old;updateLogoInputs();render();saveLocal();}));
-    document.addEventListener('keydown',e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName))return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();return;}if(e.code==='Space'){state.spaceDown=true;e.preventDefault();}if(e.key==='v')setTool('select');if(e.key==='m')setTool('measure');if(e.key==='c')setTool('calibrate');if(e.key==='g')setTool('guide');if(e.key==='i')setTool('color');if(e.key==='h')setTool('pan');if(e.key==='0')fitImage();if(e.key==='Escape'){state.draft=null;state.dragging=null;hideLoupe();render();}if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){const step=e.shiftKey?10:1,dx=e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0,dy=e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0;if(state.selectedLogo&&state.logo&&!state.logoTransform.lockPosition){pushHistory();state.logoTransform.x+=dx;state.logoTransform.y+=dy;updateLogoInputs();render();}else if(state.selectedMeasurement){const m=state.measurements.find(x=>x.id===state.selectedMeasurement);if(m){pushHistory();m.a.x+=dx;m.b.x+=dx;m.a.y+=dy;m.b.y+=dy;renderResults();render();}}e.preventDefault();}});
+    document.addEventListener('keydown',e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName))return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();return;}if(e.code==='Space'){state.spaceDown=true;e.preventDefault();}if(e.key==='v')setTool('select');if(e.key==='m')setTool('measure');if(e.key==='c')setTool('calibrate');if(e.key==='g')setTool('guide');if(e.key==='f')enableFrames();if(e.key==='i')setTool('color');if(e.key==='h')setTool('pan');if(e.key==='0')fitImage();if(e.key==='Escape'){state.draft=null;state.dragging=null;hideLoupe();render();}if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){const step=e.shiftKey?10:1,dx=e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0,dy=e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0;if(state.selectedLogo&&state.logo&&!state.logoTransform.lockPosition){pushHistory();state.logoTransform.x+=dx;state.logoTransform.y+=dy;updateLogoInputs();render();}else if(state.selectedMeasurement){const m=state.measurements.find(x=>x.id===state.selectedMeasurement);if(m){pushHistory();m.a.x+=dx;m.b.x+=dx;m.a.y+=dy;m.b.y+=dy;renderResults();render();}}else if(state.selectedFrames&&state.frames.enabled&&!state.frames.locked){pushHistory();const unit=state.mmPerPx||1;state.frames.x+=dx*unit;state.frames.y+=dy*unit;if(dx)state.frames.centerX=false;if(dy)state.frames.centerY=false;updateFrameUI();render();saveLocal();}e.preventDefault();}});
     document.addEventListener('keyup',e=>{if(e.code==='Space')state.spaceDown=false;});
   }
 
